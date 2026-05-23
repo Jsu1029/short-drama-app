@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    "expo-video"
+  ],
+  "extra": {
+    "eas": {
+      "projectId": "adcdacb8-a048-4ffe-aec6-01f95eda987a"
+    }
+  },
+  "expo": {
+    "android": {
+      "package": "com.fang123789.shortdramaapp"
+    }
+  }
+}
