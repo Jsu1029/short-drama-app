@@ -10,6 +10,9 @@
   "expo": {
     "android": {
       "package": "com.fang123789.shortdramaapp"
-    }
+    },
+    "plugins": [
+      "expo-video"
+    ]
   }
 }

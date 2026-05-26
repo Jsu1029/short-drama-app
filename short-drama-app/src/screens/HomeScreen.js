@@ -16,7 +16,7 @@ function DramaCard({ item, onPress }) {
       <View style={styles.info}>
         <Text style={styles.title}>{item.title}</Text>
         <Text style={styles.meta} numberOfLines={1}>
-          {'\u70b9\u51fb\u8fdb\u5165\u64ad\u653e\u9875'}
+          {`\u5171 ${item.episodes?.length ?? 0} \u96c6`}
         </Text>
       </View>
     </TouchableOpacity>
@@ -27,7 +27,7 @@ export default function HomeScreen({ navigation }) {
   const renderItem = ({ item }) => (
     <DramaCard
       item={item}
-      onPress={() => navigation.navigate('Player', { drama: item })}
+      onPress={() => navigation.navigate('Episodes', { drama: item })}
     />
   );
 
@@ -89,14 +89,3 @@ const styles = StyleSheet.create({
     color: '#667085',
   },
 });
-
-
-// import { View, Text } from "react-native";
-
-// export default function HomeScreen() {
-//   return (
-//     <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-//       <Text>首页正常了</Text>
-//     </View>
-//   );
-// }
