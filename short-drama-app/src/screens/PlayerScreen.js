@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useEvent } from 'expo';
 import {
   Animated,
-  Button,
   Easing,
   Image,
+  Modal,
   PanResponder,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -14,6 +15,7 @@ import {
 } from 'react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { getHighlightsByEpisodeId } from '../data/highlights';
+import { getInteractionsByEpisodeId } from '../data/interactions';
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
@@ -34,6 +36,7 @@ const HIGHLIGHT_THEMES = {
     color: '#FF4D00',
     bg: 'rgba(255,77,0,0.25)',
     iconAsset: require('../../assets/icons/shuang.png'),
+    danmakuAsset: require('../../assets/icons/shuang.png'),
     iconFallback: '😤',
     particle: '🔥',
     motion: 'bounce',
@@ -42,6 +45,7 @@ const HIGHLIGHT_THEMES = {
     color: '#7C3AED',
     bg: 'rgba(124,58,237,0.25)',
     iconAsset: require('../../assets/icons/fanzhuan.png'),
+    danmakuAsset: require('../../assets/icons/fanzhuan.png'),
     iconFallback: '🔄',
     particle: '❓',
     motion: 'rotate',
@@ -50,6 +54,7 @@ const HIGHLIGHT_THEMES = {
     color: '#F59E0B',
     bg: 'rgba(245,158,11,0.25)',
     iconAsset: require('../../assets/icons/mingchangmian.png'),
+    danmakuAsset: require('../../assets/icons/mingchangmian.png'),
     iconFallback: '⭐️',
     particle: '⭐️',
     motion: 'breathe',
@@ -58,11 +63,14 @@ const HIGHLIGHT_THEMES = {
     color: '#F472B6',
     bg: 'rgba(244,114,182,0.25)',
     iconAsset: require('../../assets/icons/satang.png'),
+    danmakuAsset: require('../../assets/icons/satang.png'),
     iconFallback: '🍬',
     particle: '💗',
     motion: 'float',
   },
 };
+
+const ENABLE_LOCAL_ICON_ASSETS = true;
 
 export default function PlayerScreen({ route }) {
   const { dramaTitle, episode } = route.params;
@@ -73,16 +81,25 @@ export default function PlayerScreen({ route }) {
   const [dismissedHighlightIds, setDismissedHighlightIds] = useState({});
   const [comboCounts, setComboCounts] = useState({});
   const [burstItems, setBurstItems] = useState([]);
+  const [danmakuItems, setDanmakuItems] = useState([]);
+  const [activeChoice, setActiveChoice] = useState(null);
+  const [choiceResults, setChoiceResults] = useState({});
   const [iconErrorByType, setIconErrorByType] = useState({});
   const scrubProgressRef = useRef(0);
   const scrubStartXRef = useRef(0);
   const wasPlayingRef = useRef(false);
   const comboTimerRef = useRef(null);
   const burstIdRef = useRef(0);
+  const danmakuIdRef = useRef(0);
+  const choiceWasPlayingRef = useRef(false);
+  const shownChoiceIdsRef = useRef({});
   const iconScale = useRef(new Animated.Value(1)).current;
   const iconRotate = useRef(new Animated.Value(0)).current;
   const iconTranslateY = useRef(new Animated.Value(0)).current;
   const iconOpacity = useRef(new Animated.Value(1)).current;
+  const tapIconOpacity = useRef(new Animated.Value(0)).current;
+  const tapIconScale = useRef(new Animated.Value(0.92)).current;
+  const tapIconTimerRef = useRef(null);
 
   const player = useVideoPlayer(episode.video, (videoPlayer) => {
     videoPlayer.loop = false;
@@ -103,7 +120,37 @@ export default function PlayerScreen({ route }) {
     }
   };
 
+  const handleVideoTap = () => {
+    if (activeChoice) return;
+    handleTogglePlayback();
+    if (tapIconTimerRef.current) clearTimeout(tapIconTimerRef.current);
+    tapIconOpacity.stopAnimation();
+    tapIconScale.stopAnimation();
+    tapIconOpacity.setValue(1);
+    tapIconScale.setValue(1);
+    tapIconTimerRef.current = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(tapIconOpacity, {
+          toValue: 0,
+          duration: 220,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(tapIconScale, {
+          toValue: 0.92,
+          duration: 220,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }, 520);
+  };
+
   const highlights = useMemo(() => getHighlightsByEpisodeId(episode.id), [episode.id]);
+  const interactions = useMemo(
+    () => getInteractionsByEpisodeId(episode.id),
+    [episode.id]
+  );
   const activeHighlight = useMemo(() => {
     if (!highlights.length) return null;
     const t = isScrubbing ? scrubProgress * (duration || 0) : currentTime;
@@ -168,8 +215,35 @@ export default function PlayerScreen({ route }) {
   useEffect(() => {
     return () => {
       if (comboTimerRef.current) clearTimeout(comboTimerRef.current);
+      if (tapIconTimerRef.current) clearTimeout(tapIconTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    shownChoiceIdsRef.current = {};
+    setActiveChoice(null);
+    setChoiceResults({});
+  }, [episode.id]);
+
+  useEffect(() => {
+    if (!interactions.length) return;
+    if (activeChoice) return;
+    if (isScrubbing) return;
+    if (duration <= 0) return;
+
+    const candidate = interactions.find(
+      (it) =>
+        it.type === 'choice' &&
+        currentTime >= it.atSec &&
+        !shownChoiceIdsRef.current[it.id]
+    );
+    if (!candidate) return;
+
+    shownChoiceIdsRef.current[candidate.id] = true;
+    choiceWasPlayingRef.current = isPlaying;
+    player.pause();
+    setActiveChoice(candidate);
+  }, [activeChoice, currentTime, duration, interactions, isPlaying, isScrubbing, player]);
 
   const theme = useMemo(() => {
     const key = visibleHighlight?.type;
@@ -338,6 +412,27 @@ export default function PlayerScreen({ route }) {
     });
   };
 
+  const triggerDanmaku = (asset) => {
+    const id = `d-${danmakuIdRef.current++}`;
+    const anim = new Animated.Value(0);
+    const baseRight = 16;
+    const baseTop = highlightTop + 84;
+    const rotate = (Math.random() * 10 - 5).toFixed(2);
+
+    const item = { id, anim, baseRight, baseTop, asset, rotate };
+    setDanmakuItems((prev) => [...prev, item]);
+
+    Animated.timing(anim, {
+      toValue: 1,
+      duration: 720,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setDanmakuItems((prev) => prev.filter((x) => x.id !== id));
+    });
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail">
@@ -353,6 +448,59 @@ export default function PlayerScreen({ route }) {
           allowsFullscreen
           nativeControls={false}
         />
+
+        <Pressable style={styles.videoTapLayer} onPress={handleVideoTap} />
+
+        <View style={styles.tapIconLayer} pointerEvents="none">
+          <Animated.View
+            style={[
+              styles.tapIconBadge,
+              {
+                opacity: tapIconOpacity,
+                transform: [{ scale: tapIconScale }],
+              },
+            ]}
+          >
+            <Text style={styles.tapIconText}>{isPlaying ? 'Ⅱ' : '▶'}</Text>
+          </Animated.View>
+        </View>
+
+        <View style={styles.danmakuLayer} pointerEvents="none">
+          {danmakuItems.map((item) => {
+            const opacity = item.anim.interpolate({
+              inputRange: [0, 0.15, 0.85, 1],
+              outputRange: [0, 1, 1, 0],
+            });
+            const translateY = item.anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [18, 0],
+            });
+            const scale = item.anim.interpolate({
+              inputRange: [0, 0.18, 1],
+              outputRange: [0.92, 1.06, 1],
+            });
+
+            return (
+              <Animated.Image
+                key={item.id}
+                source={item.asset}
+                resizeMode="contain"
+                style={[
+                  styles.danmakuSticker,
+                  { right: item.baseRight, top: item.baseTop },
+                  {
+                    opacity,
+                    transform: [
+                      { translateY },
+                      { scale },
+                      { rotate: `${item.rotate}deg` },
+                    ],
+                  },
+                ]}
+              />
+            );
+          })}
+        </View>
 
         <View style={styles.burstLayer} pointerEvents="none">
           {burstItems.map((item) => {
@@ -445,6 +593,7 @@ export default function PlayerScreen({ route }) {
                       ? 9
                       : 8;
                 triggerBurst(particleText, particleColor, particleBg, durationMs, count);
+                if (theme?.danmakuAsset) triggerDanmaku(theme.danmakuAsset);
 
                 if (comboTimerRef.current) clearTimeout(comboTimerRef.current);
                 comboTimerRef.current = setTimeout(() => {
@@ -469,10 +618,12 @@ export default function PlayerScreen({ route }) {
                   },
                 ]}
               >
-                {theme?.iconAsset && !iconErrorByType[visibleHighlight.type] ? (
+                {ENABLE_LOCAL_ICON_ASSETS &&
+                theme?.iconAsset &&
+                !iconErrorByType[visibleHighlight.type] ? (
                   <Image
                     source={theme.iconAsset}
-                    style={[styles.highlightIcon, theme ? { tintColor: theme.color } : null]}
+                    style={styles.highlightIcon}
                     resizeMode="contain"
                     onError={() =>
                       setIconErrorByType((prev) => ({
@@ -534,12 +685,44 @@ export default function PlayerScreen({ route }) {
         </View>
       </View>
 
-      <View style={styles.buttonWrap}>
-        <Button
-          title={isPlaying ? '\u6682\u505c' : '\u64ad\u653e'}
-          onPress={handleTogglePlayback}
-        />
-      </View>
+      <Modal transparent visible={!!activeChoice} animationType="fade">
+        <View style={styles.choiceBackdrop}>
+          <View style={styles.choiceCard}>
+            <View style={styles.choiceHeader}>
+              <Pressable
+                style={styles.choiceClose}
+                onPress={() => {
+                  setActiveChoice(null);
+                  if (choiceWasPlayingRef.current) player.play();
+                }}
+              >
+                <Text style={styles.choiceCloseText}>{'\u00d7'}</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.choiceTitle}>{activeChoice?.title}</Text>
+
+            <View style={styles.choiceOptions}>
+              {(activeChoice?.options ?? []).map((opt) => (
+                <Pressable
+                  key={opt.id}
+                  style={styles.choiceOptionBtn}
+                  onPress={() => {
+                    setChoiceResults((prev) => ({
+                      ...prev,
+                      [activeChoice.id]: opt.id,
+                    }));
+                    setActiveChoice(null);
+                    if (choiceWasPlayingRef.current) player.play();
+                  }}
+                >
+                  <Text style={styles.choiceOptionText}>{opt.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
     </View>
   );
@@ -572,8 +755,37 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  videoTapLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  tapIconLayer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tapIconBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(17,24,39,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tapIconText: {
+    color: '#ffffff',
+    fontSize: 26,
+    fontWeight: '900',
+  },
   burstLayer: {
     ...StyleSheet.absoluteFillObject,
+  },
+  danmakuLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  danmakuSticker: {
+    position: 'absolute',
+    width: 160,
+    height: 90,
   },
   burstItem: {
     position: 'absolute',
@@ -634,8 +846,8 @@ const styles = StyleSheet.create({
     color: '#4f46e5',
   },
   highlightIcon: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
   },
   highlightInfo: {
     marginTop: 10,
@@ -704,8 +916,71 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#667085',
   },
-  buttonWrap: {
-    marginTop: 20,
-    alignSelf: 'stretch',
+  choiceBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  choiceCard: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#f3f1ff',
+    borderWidth: 1,
+    borderColor: 'rgba(124,58,237,0.35)',
+  },
+  choiceHeader: {
+    height: 44,
+    backgroundColor: 'rgba(124,58,237,0.25)',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingRight: 10,
+  },
+  choiceClose: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.55)',
+  },
+  choiceCloseText: {
+    fontSize: 18,
+    lineHeight: 18,
+    color: '#111827',
+  },
+  choiceTitle: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 12,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'center',
+  },
+  choiceOptions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 14,
+    paddingHorizontal: 18,
+    paddingBottom: 18,
+  },
+  choiceOptionBtn: {
+    minWidth: 120,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.18)',
+  },
+  choiceOptionText: {
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
   },
 });
