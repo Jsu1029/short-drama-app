@@ -71,6 +71,8 @@ const HIGHLIGHT_THEMES = {
 };
 
 const ENABLE_LOCAL_ICON_ASSETS = true;
+const HUANGNIAN_BRANCH_ASSET = require('../../assets/icons/huangnian_branch.png');
+const HUANGNIAN_TEXIAO_ASSET = require('../../assets/icons/特效.png');
 
 export default function PlayerScreen({ route }) {
   const { dramaTitle, episode } = route.params;
@@ -84,6 +86,9 @@ export default function PlayerScreen({ route }) {
   const [danmakuItems, setDanmakuItems] = useState([]);
   const [activeChoice, setActiveChoice] = useState(null);
   const [choiceResults, setChoiceResults] = useState({});
+  const [activeBranch, setActiveBranch] = useState(null);
+  const [branchRewardVisible, setBranchRewardVisible] = useState(false);
+  const [branchEffectVisible, setBranchEffectVisible] = useState(false);
   const [iconErrorByType, setIconErrorByType] = useState({});
   const scrubProgressRef = useRef(0);
   const scrubStartXRef = useRef(0);
@@ -93,6 +98,8 @@ export default function PlayerScreen({ route }) {
   const danmakuIdRef = useRef(0);
   const choiceWasPlayingRef = useRef(false);
   const shownChoiceIdsRef = useRef({});
+  const branchShouldResumeMainRef = useRef(false);
+  const branchEffectTimerRef = useRef(null);
   const iconScale = useRef(new Animated.Value(1)).current;
   const iconRotate = useRef(new Animated.Value(0)).current;
   const iconTranslateY = useRef(new Animated.Value(0)).current;
@@ -100,8 +107,15 @@ export default function PlayerScreen({ route }) {
   const tapIconOpacity = useRef(new Animated.Value(0)).current;
   const tapIconScale = useRef(new Animated.Value(0.92)).current;
   const tapIconTimerRef = useRef(null);
+  const branchRewardScale = useRef(new Animated.Value(1)).current;
+  const branchEffectOpacity = useRef(new Animated.Value(0)).current;
+  const branchEffectScale = useRef(new Animated.Value(0.9)).current;
 
   const player = useVideoPlayer(episode.video, (videoPlayer) => {
+    videoPlayer.loop = false;
+    videoPlayer.timeUpdateEventInterval = 0.25;
+  });
+  const branchPlayer = useVideoPlayer(null, (videoPlayer) => {
     videoPlayer.loop = false;
     videoPlayer.timeUpdateEventInterval = 0.25;
   });
@@ -111,6 +125,15 @@ export default function PlayerScreen({ route }) {
   });
   const { currentTime } = useEvent(player, 'timeUpdate', { currentTime: 0 });
   const { duration } = useEvent(player, 'sourceLoad', { duration: 0 });
+  const { isPlaying: isBranchPlaying } = useEvent(branchPlayer, 'playingChange', {
+    isPlaying: branchPlayer.playing,
+  });
+  const { currentTime: branchCurrentTime } = useEvent(branchPlayer, 'timeUpdate', {
+    currentTime: 0,
+  });
+  const { duration: branchDuration } = useEvent(branchPlayer, 'sourceLoad', {
+    duration: 0,
+  });
 
   const handleTogglePlayback = () => {
     if (isPlaying) {
@@ -121,7 +144,7 @@ export default function PlayerScreen({ route }) {
   };
 
   const handleVideoTap = () => {
-    if (activeChoice) return;
+    if (activeChoice || activeBranch) return;
     handleTogglePlayback();
     if (tapIconTimerRef.current) clearTimeout(tapIconTimerRef.current);
     tapIconOpacity.stopAnimation();
@@ -216,6 +239,7 @@ export default function PlayerScreen({ route }) {
     return () => {
       if (comboTimerRef.current) clearTimeout(comboTimerRef.current);
       if (tapIconTimerRef.current) clearTimeout(tapIconTimerRef.current);
+      if (branchEffectTimerRef.current) clearTimeout(branchEffectTimerRef.current);
     };
   }, []);
 
@@ -223,17 +247,22 @@ export default function PlayerScreen({ route }) {
     shownChoiceIdsRef.current = {};
     setActiveChoice(null);
     setChoiceResults({});
+    setActiveBranch(null);
+    setBranchRewardVisible(false);
+    setBranchEffectVisible(false);
+    branchShouldResumeMainRef.current = false;
   }, [episode.id]);
 
   useEffect(() => {
     if (!interactions.length) return;
     if (activeChoice) return;
+    if (activeBranch) return;
     if (isScrubbing) return;
     if (duration <= 0) return;
 
     const candidate = interactions.find(
       (it) =>
-        it.type === 'choice' &&
+        (it.type === 'choice' || it.type === 'branch_choice') &&
         currentTime >= it.atSec &&
         !shownChoiceIdsRef.current[it.id]
     );
@@ -243,7 +272,66 @@ export default function PlayerScreen({ route }) {
     choiceWasPlayingRef.current = isPlaying;
     player.pause();
     setActiveChoice(candidate);
-  }, [activeChoice, currentTime, duration, interactions, isPlaying, isScrubbing, player]);
+  }, [
+    activeBranch,
+    activeChoice,
+    currentTime,
+    duration,
+    interactions,
+    isPlaying,
+    isScrubbing,
+    player,
+  ]);
+
+  useEffect(() => {
+    if (!activeBranch?.branchVideo) return;
+    let cancelled = false;
+
+    const loadBranch = async () => {
+      await branchPlayer.replaceAsync(activeBranch.branchVideo);
+      if (cancelled) return;
+      branchPlayer.currentTime = 0;
+      branchPlayer.play();
+    };
+
+    loadBranch();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBranch, branchPlayer]);
+
+  useEffect(() => {
+    if (!activeBranch) return;
+    if (!branchDuration) return;
+    if (branchCurrentTime < Math.max(0, branchDuration - 0.2)) return;
+
+    branchPlayer.pause();
+    branchPlayer.currentTime = 0;
+    setActiveBranch(null);
+    if (episode.id === 'huangnian-ep07') {
+      setBranchRewardVisible(true);
+      branchRewardScale.setValue(0.92);
+      Animated.spring(branchRewardScale, {
+        toValue: 1,
+        friction: 7,
+        tension: 70,
+        useNativeDriver: true,
+      }).start();
+    }
+    if (branchShouldResumeMainRef.current) {
+      player.play();
+    }
+    branchShouldResumeMainRef.current = false;
+  }, [
+    activeBranch,
+    branchCurrentTime,
+    branchDuration,
+    branchPlayer,
+    branchRewardScale,
+    episode.id,
+    player,
+  ]);
 
   const theme = useMemo(() => {
     const key = visibleHighlight?.type;
@@ -451,6 +539,40 @@ export default function PlayerScreen({ route }) {
 
         <Pressable style={styles.videoTapLayer} onPress={handleVideoTap} />
 
+        {!!activeBranch && (
+          <View style={styles.branchLayer}>
+            <VideoView
+              player={branchPlayer}
+              style={styles.branchVideo}
+              contentFit="contain"
+              allowsFullscreen={false}
+              nativeControls={false}
+            />
+            <Pressable
+              style={styles.branchTapLayer}
+              onPress={() => {
+                if (isBranchPlaying) {
+                  branchPlayer.pause();
+                } else {
+                  branchPlayer.play();
+                }
+              }}
+            />
+            <View style={styles.branchTopBar} pointerEvents="none">
+              <Text style={styles.branchTitle}>
+                {activeBranch.branchTitle || '支线剧情'}
+              </Text>
+            </View>
+            {!isBranchPlaying && (
+              <View style={styles.branchPauseMask} pointerEvents="none">
+                <View style={styles.branchPauseBadge}>
+                  <Text style={styles.branchPauseText}>{'▶'}</Text>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
         <View style={styles.tapIconLayer} pointerEvents="none">
           <Animated.View
             style={[
@@ -501,6 +623,89 @@ export default function PlayerScreen({ route }) {
             );
           })}
         </View>
+
+        {branchRewardVisible && !activeBranch && (
+          <Animated.View
+            style={[
+              styles.branchRewardWrap,
+              {
+                transform: [{ scale: branchRewardScale }],
+              },
+            ]}
+          >
+            {branchEffectVisible && (
+              <View style={styles.branchEffectLayer} pointerEvents="none">
+                <Animated.Image
+                  source={HUANGNIAN_TEXIAO_ASSET}
+                  resizeMode="contain"
+                  style={[
+                    styles.branchEffectImage,
+                    {
+                      opacity: branchEffectOpacity,
+                      transform: [{ scale: branchEffectScale }],
+                    },
+                  ]}
+                />
+              </View>
+            )}
+            <Pressable
+              style={styles.branchRewardClose}
+              onPress={() => setBranchRewardVisible(false)}
+            >
+              <Text style={styles.branchRewardCloseText}>{'\u00d7'}</Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.branchRewardButton}
+              onPress={() => {
+                if (branchEffectTimerRef.current) {
+                  clearTimeout(branchEffectTimerRef.current);
+                }
+                setBranchEffectVisible(true);
+                branchEffectOpacity.setValue(1);
+                branchEffectScale.setValue(0.92);
+                Animated.parallel([
+                  Animated.spring(branchEffectScale, {
+                    toValue: 1,
+                    friction: 7,
+                    tension: 80,
+                    useNativeDriver: true,
+                  }),
+                  Animated.timing(branchEffectOpacity, {
+                    toValue: 1,
+                    duration: 160,
+                    easing: Easing.out(Easing.quad),
+                    useNativeDriver: true,
+                  }),
+                ]).start();
+                branchEffectTimerRef.current = setTimeout(() => {
+                  Animated.parallel([
+                    Animated.timing(branchEffectOpacity, {
+                      toValue: 0,
+                      duration: 260,
+                      easing: Easing.in(Easing.quad),
+                      useNativeDriver: true,
+                    }),
+                    Animated.timing(branchEffectScale, {
+                      toValue: 1.04,
+                      duration: 260,
+                      easing: Easing.out(Easing.quad),
+                      useNativeDriver: true,
+                    }),
+                  ]).start(() => {
+                    setBranchEffectVisible(false);
+                  });
+                }, 900);
+              }}
+            >
+              <Image
+                source={HUANGNIAN_BRANCH_ASSET}
+                resizeMode="contain"
+                style={styles.branchRewardImage}
+              />
+            </Pressable>
+          </Animated.View>
+        )}
 
         <View style={styles.burstLayer} pointerEvents="none">
           {burstItems.map((item) => {
@@ -712,7 +917,18 @@ export default function PlayerScreen({ route }) {
                       ...prev,
                       [activeChoice.id]: opt.id,
                     }));
+                    const currentInteraction = activeChoice;
                     setActiveChoice(null);
+
+                    if (
+                      currentInteraction?.type === 'branch_choice' &&
+                      opt.id === 'enter_branch'
+                    ) {
+                      branchShouldResumeMainRef.current = choiceWasPlayingRef.current;
+                      setActiveBranch(currentInteraction);
+                      return;
+                    }
+
                     if (choiceWasPlayingRef.current) player.play();
                   }}
                 >
@@ -758,6 +974,51 @@ const styles = StyleSheet.create({
   videoTapLayer: {
     ...StyleSheet.absoluteFillObject,
   },
+  branchLayer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
+  },
+  branchVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  branchTapLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  branchTopBar: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    alignItems: 'center',
+  },
+  branchTitle: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,24,39,0.55)',
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  branchPauseMask: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  branchPauseBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(17,24,39,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  branchPauseText: {
+    color: '#ffffff',
+    fontSize: 26,
+    fontWeight: '900',
+  },
   tapIconLayer: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
@@ -786,6 +1047,54 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 160,
     height: 90,
+  },
+  branchRewardWrap: {
+    position: 'absolute',
+    right: 16,
+    bottom: 100,
+    width: 64,
+    alignItems: 'center',
+  },
+  branchRewardClose: {
+    position: 'absolute',
+    top: -6,
+    right: 4,
+    zIndex: 2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(17,24,39,0.72)',
+  },
+  branchRewardCloseText: {
+    fontSize: 14,
+    lineHeight: 14,
+    color: '#ffffff',
+  },
+  branchRewardButton: {
+    width: 54,
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  branchRewardImage: {
+    width: 54,
+    height: 54,
+  },
+  branchEffectLayer: {
+    position: 'absolute',
+    top: -24,
+    right: -4,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 3,
+  },
+  branchEffectImage: {
+    width: 40,
+    height: 40,
   },
   burstItem: {
     position: 'absolute',
